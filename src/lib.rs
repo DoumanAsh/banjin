@@ -5,9 +5,12 @@
 //! There are several attributes that control behaviour of parser
 //! Each, attached to struct's field
 //!
+//! - `starts_with = <prefix>` - Specifies string with which next parse step should start(can be stacked). Errors if prefix is missing.
+//! - `ends_with = <prefix>` - Specifies string with which parse step should end(can be stacked). Errors if suffix is missing.
 //! - `skip = <chars>` - Specifies to skip, until not meeting character outside of specified.
 //! - `skip(ws)` - Specifies to skip all white space characters.
 //! - `format(<chars>)` - Specifies list of characters that should contain value to parse from.
+//! - `format(not(<chars>))` - Specifies list of characters that should contain value to parse from.
 //!
 //! ## Usage
 //!
@@ -16,19 +19,32 @@
 //!
 //! #[derive(banjin::Parser)]
 //! pub struct Data {
-//!     #[skip = "prefix"]
+//!     #[starts_with = "prefix"]
+//!     #[skip(ws)]
+//!     #[starts_with = "+"]
+//!     #[skip(ws)]
 //!     #[format("1234567890")]
 //!     pub first: u32,
 //!     #[skip(ws)]
 //!     #[format(not("d"))]
+//!     #[ends_with = "d"]
+//!     #[ends_with = ""]
 //!     pub second: String,
 //! }
 //!
 //! fn main() {
-//!
-//!     let data = Data::from_str("ppp666   13d").expect("Parse");
+//!     let data = Data::from_str("prefix + 666   13d").expect("Parse");
 //!     assert_eq!(data.first, 666);
 //!     assert_eq!(data.second, "13");
+//!
+//!     let data = Data::from_str("prefix + 666   13");
+//!     assert!(data.is_err());
+//!
+//!     let data = Data::from_str("prefix 666   13d");
+//!     assert!(data.is_err());
+//!
+//!     let data = Data::from_str("");
+//!     assert!(data.is_err());
 //! }
 //!
 //! ```
@@ -49,6 +65,7 @@ enum Format {
 fn write_field(buf: &mut String, field: &syn::Field) {
     let mut format = None;
 
+    let mut ends_with = Vec::new();
     let variable_name = field.ident.as_ref().expect("Named field is needed");
 
     for meta in field.attrs.iter().filter_map(|attr| attr.interpret_meta()) {
@@ -85,7 +102,30 @@ fn write_field(buf: &mut String, field: &syn::Field) {
                     _ => panic!("'skip' requires string argument"),
                 }
                 _ => panic!("'skip' attribute is invalid, should be name with value"),
-            };
+            }
+        } else if meta.name() == "starts_with" {
+            match meta {
+                syn::Meta::NameValue(meta) => match meta.lit {
+                    syn::Lit::Str(start) => {
+                        let start = start.value();
+
+                        let _ = writeln!(buf, "\t\tif !text.starts_with(\"{0}\") {{ return Err(\"Expected prefix '{0}', but none is found\"); }}", start);
+                        let _ = writeln!(buf, "\t\ttext = &text[{}..];", start.len());
+                    }
+                    _ => panic!("'starts_with' requires string argument"),
+                },
+                _ => panic!("'starts_with' requires string argument"),
+            }
+        } else if meta.name() == "ends_with" {
+            match meta {
+                syn::Meta::NameValue(meta) => match meta.lit {
+                    syn::Lit::Str(end) => {
+                        ends_with.push(end.value());
+                    }
+                    _ => panic!("'ends_with' requires string argument"),
+                },
+                _ => panic!("'ends_with' requires string argument"),
+            }
         } else if meta.name() == "format" {
             match meta {
                 syn::Meta::List(meta) => {
@@ -163,6 +203,11 @@ fn write_field(buf: &mut String, field: &syn::Field) {
     let _ = writeln!(buf, ").count();");
     let _ = writeln!(buf, "\t\tlet {} = FromStr::from_str(&text[..variable_len]).map_err(|_| \"Cannot parse '{0}'\")?;\n", variable_name);
     let _ = writeln!(buf, "\t\ttext = &text[variable_len..];\n");
+
+    for end in ends_with {
+        let _ = writeln!(buf, "\t\tif !text.starts_with(\"{0}\") {{ return Err(\"Expected suffix '{0}' after '{1}', but none is found\"); }}", end, variable_name);
+        let _ = writeln!(buf, "\t\ttext = &text[{}..];", end.len());
+    }
 }
 
 fn generate(ast: syn::DeriveInput) -> String {
@@ -204,7 +249,7 @@ fn generate(ast: syn::DeriveInput) -> String {
     buf
 }
 
-#[proc_macro_derive(Parser, attributes(skip, format))]
+#[proc_macro_derive(Parser, attributes(skip, format, starts_with, ends_with))]
 pub fn parser_derive(input: TokenStream) -> TokenStream {
     let ast: syn::DeriveInput = syn::parse(input).unwrap();
 
