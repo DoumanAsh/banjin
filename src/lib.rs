@@ -27,6 +27,7 @@
 //!     pub first: u32,
 //!     #[skip(ws)]
 //!     #[format(not("d"))]
+//!     #[format("13")]
 //!     #[ends_with = "d"]
 //!     #[ends_with = ""]
 //!     pub second: String,
@@ -60,13 +61,119 @@ use std::fmt::Write;
 use proc_macro::TokenStream;
 use quote::quote;
 
+enum FormatData {
+    Str(String)
+}
+
+impl FormatData {
+    fn write(self, buf: &mut String) {
+        match self {
+            FormatData::Str(format) => for (idx, ch) in format.chars().enumerate() {
+                if idx > 0 {
+                    let _ = write!(buf, " || ");
+                }
+                let _ = write!(buf, "ch == '{}'", ch);
+            }
+        }
+    }
+}
+
+impl Into<FormatData> for String {
+    fn into(self) -> FormatData {
+        FormatData::Str(self)
+    }
+}
+
 enum Format {
-    Pos(String),
-    Neg(String),
+    Pos(FormatData),
+    Neg(FormatData),
+}
+
+struct FormatBuilder {
+    inner: Vec<Format>
+}
+
+impl FormatBuilder {
+    fn new() -> Self {
+        Self {
+            inner: Vec::with_capacity(1),
+        }
+    }
+
+    fn parse(&mut self, meta: syn::Meta) {
+        match meta {
+            syn::Meta::List(meta) => {
+                let arg = match meta.nested.first().expect("'format' needs at least one attribute") {
+                    syn::punctuated::Pair::Punctuated(_, _) => panic!("'format' has more than one attribute"),
+                    syn::punctuated::Pair::End(arg) => arg,
+                };
+
+                match arg {
+                    syn::NestedMeta::Meta(arg) => match arg.name() == "not" {
+                        true => match arg {
+                            syn::Meta::List(arg) => match arg.nested.first().expect("format(not(...))' must be string literal") {
+                                syn::punctuated::Pair::Punctuated(_, _) => panic!("'format(not(...))' has more than one attribute"),
+                                syn::punctuated::Pair::End(arg) => match arg {
+                                    syn::NestedMeta::Literal(syn::Lit::Str(text)) => self.inner.push(Format::Neg(text.value().into())),
+                                    _ => panic!("'format(not(...))' must be string literal"),
+                                },
+                            },
+                            _ => panic!("'format(not(...))' must be string literal"),
+                        },
+                        false => panic!("'format' accepts only 'not' modifier")
+                    },
+                    syn::NestedMeta::Literal(lit) => match lit {
+                        syn::Lit::Str(text) => self.inner.push(Format::Pos(text.value().into())),
+                        _ => panic!("'format' requires string argument"),
+                    }
+                }
+
+            },
+            syn::Meta::NameValue(meta) => match meta.lit {
+                syn::Lit::Str(text) => self.inner.push(Format::Pos(text.value().into())),
+                _ => panic!("'format' requires string argument"),
+            }
+            _ => panic!("'format' attribute is invalid, should be list or value"),
+        }
+    }
+
+    fn write(mut self, buf: &mut String, variable_name: &syn::Ident) {
+        let _ = write!(buf, "\t\tlet variable_len = text.chars().take_while(|&ch| ");
+
+        for (idx, format) in self.inner.drain(..).enumerate() {
+            if idx > 0 {
+                let _ = write!(buf, " || ");
+            }
+
+            let (format, is_negative) = match format {
+                Format::Pos(format) => (format, false),
+                Format::Neg(format) => (format, true),
+            };
+
+            if is_negative {
+                let _ = write!(buf, "!(");
+            }
+
+            format.write(buf);
+
+            if is_negative {
+                let _ = write!(buf, ")");
+            }
+
+        }
+
+        let _ = writeln!(buf, ").count();");
+        let _ = writeln!(buf, "\t\tlet {} = FromStr::from_str(&text[..variable_len]).map_err(|_| \"Cannot parse '{0}'\")?;\n", variable_name);
+        let _ = writeln!(buf, "\t\ttext = &text[variable_len..];\n");
+    }
+
+    fn is_empty(&self) -> bool {
+        self.inner.len() == 0
+    }
 }
 
 fn write_field(buf: &mut String, field: &syn::Field) {
-    let mut format = None;
+    let mut format = FormatBuilder::new();
 
     let mut ends_with = Vec::new();
     let variable_name = field.ident.as_ref().expect("Named field is needed");
@@ -134,82 +241,15 @@ fn write_field(buf: &mut String, field: &syn::Field) {
                 _ => panic!("'ends_with' requires string argument"),
             }
         } else if meta.name() == "format" {
-            match meta {
-                syn::Meta::List(meta) => {
-                    let arg = match meta.nested.first().expect("'format' needs at least one attribute") {
-                        syn::punctuated::Pair::Punctuated(_, _) => panic!("'format' has more than one attribute"),
-                        syn::punctuated::Pair::End(arg) => arg,
-                    };
-
-                    match arg {
-                        syn::NestedMeta::Meta(arg) => match arg.name() == "not" {
-                            true => match arg {
-                                syn::Meta::List(arg) => match arg.nested.first().expect("format(not(...))' must be string literal") {
-                                    syn::punctuated::Pair::Punctuated(_, _) => panic!("'format(not(...))' has more than one attribute"),
-                                    syn::punctuated::Pair::End(arg) => match arg {
-                                        syn::NestedMeta::Literal(syn::Lit::Str(text)) => match format.is_some() {
-                                            true => panic!("Multiple 'format' attributes!"),
-                                            false => format = Some(Format::Neg(text.value())),
-                                        },
-                                        _ => panic!("'format(not(...))' must be string literal"),
-                                    },
-                                },
-                                _ => panic!("'format(not(...))' must be string literal"),
-                            },
-                            false => panic!("'format' accepts only 'not' modifier")
-                        },
-                        syn::NestedMeta::Literal(lit) => match lit {
-                            syn::Lit::Str(text) => match format.is_some() {
-                                true => panic!("Multiple 'format' attributes!"),
-                                false => format = Some(Format::Pos(text.value())),
-                            },
-                            _ => panic!("'format' requires string argument"),
-                        }
-                    }
-
-                },
-                syn::Meta::NameValue(meta) => match meta.lit {
-                    syn::Lit::Str(text) => match format.is_some() {
-                        true => panic!("Multiple 'format' attributes!"),
-                        false => format = Some(Format::Pos(text.value())),
-                    },
-                    _ => panic!("'format' requires string argument"),
-                }
-                _ => panic!("'format' attribute is invalid, should be list or value"),
-            }
+            format.parse(meta);
         }
     }
 
-    let (is_negative, format) = match format {
-        None => panic!("'format' is missing, do not know how to parse '{}'", variable_name),
-        Some(Format::Pos(format)) => (false, format),
-        Some(Format::Neg(format)) => (true, format),
-    };
-
-    if format.len() == 0 {
-        panic!("Format cannot be empty");
+    if format.is_empty() {
+        panic!("'format' is missing, do not know how to parse '{}'", variable_name)
     }
 
-    let _ = write!(buf, "\t\tlet variable_len = text.chars().take_while(|&ch| ");
-    if is_negative {
-        let _ = write!(buf, "!(");
-    }
-
-    for ch in format.chars() {
-        let _ = write!(buf, "ch == '{}' || ", ch);
-    }
-
-    buf.pop();
-    buf.pop();
-    buf.pop();
-
-    if is_negative {
-        let _ = write!(buf, ")");
-    }
-
-    let _ = writeln!(buf, ").count();");
-    let _ = writeln!(buf, "\t\tlet {} = FromStr::from_str(&text[..variable_len]).map_err(|_| \"Cannot parse '{0}'\")?;\n", variable_name);
-    let _ = writeln!(buf, "\t\ttext = &text[variable_len..];\n");
+    format.write(buf, &variable_name);
 
     for end in ends_with {
         if end.len() == 0 {
@@ -255,7 +295,7 @@ fn generate(ast: syn::DeriveInput) -> String {
     let _ = writeln!(buf, "\t}}");
     let _ = writeln!(buf, "\n}}");
 
-    //println!("{}", buf);
+    println!("{}", buf);
 
     buf
 }
