@@ -7,7 +7,7 @@
 //!
 //! - `starts_with = <prefix>` - Specifies string with which next parse step should start(can be stacked). Errors if prefix is missing.
 //! - `ends_with = <prefix>` - Specifies string with which parse step should end(can be stacked). Errors if suffix is missing. If empty, expects EOF.
-//! - `skip = <chars>` - Specifies to skip, until not meeting character outside of specified.
+//! - `skip = <chars>` - Specifies to skip characters, until not meeting character outside of specified in string.
 //! - `skip(ws)` - Specifies to skip all white space characters.
 //! - `format(<format>)` - Specifies list of characters that should contain value to parse from.
 //! - `format(not(<format>))` - Specifies list of characters that should contain value to parse from.
