@@ -66,6 +66,12 @@ enum FormatData {
 }
 
 impl FormatData {
+    fn is_empty(&self) -> bool {
+        match self {
+            FormatData::Str(ref format) => format.len() == 0,
+        }
+    }
+
     fn write(self, buf: &mut String) {
         match self {
             FormatData::Str(format) => for (idx, ch) in format.chars().enumerate() {
@@ -149,6 +155,10 @@ impl FormatBuilder {
                 Format::Pos(format) => (format, false),
                 Format::Neg(format) => (format, true),
             };
+
+            if format.is_empty() {
+                panic!("Empty 'format' at index {} for field '{}'", idx, variable_name);
+            }
 
             if is_negative {
                 let _ = write!(buf, "!(");
