@@ -6,7 +6,7 @@
 //! Each, attached to struct's field
 //!
 //! - `starts_with = <prefix>` - Specifies string with which next parse step should start(can be stacked). Errors if prefix is missing.
-//! - `ends_with = <prefix>` - Specifies string with which parse step should end(can be stacked). Errors if suffix is missing.
+//! - `ends_with = <prefix>` - Specifies string with which parse step should end(can be stacked). Errors if suffix is missing. If empty, expects EOF.
 //! - `skip = <chars>` - Specifies to skip, until not meeting character outside of specified.
 //! - `skip(ws)` - Specifies to skip all white space characters.
 //! - `format(<chars>)` - Specifies list of characters that should contain value to parse from.
@@ -41,6 +41,9 @@
 //!     assert!(data.is_err());
 //!
 //!     let data = Data::from_str("prefix 666   13d");
+//!     assert!(data.is_err());
+//!
+//!     let data = Data::from_str("prefix + 666   13dg");
 //!     assert!(data.is_err());
 //!
 //!     let data = Data::from_str("");
@@ -108,6 +111,10 @@ fn write_field(buf: &mut String, field: &syn::Field) {
                 syn::Meta::NameValue(meta) => match meta.lit {
                     syn::Lit::Str(start) => {
                         let start = start.value();
+
+                        if start.len() == 0 {
+                            panic!("'starts_with' specified with empty value. It makes no sense, onii-san!");
+                        }
 
                         let _ = writeln!(buf, "\t\tif !text.starts_with(\"{0}\") {{ return Err(\"Expected prefix '{0}', but none is found\"); }}", start);
                         let _ = writeln!(buf, "\t\ttext = &text[{}..];", start.len());
@@ -205,8 +212,12 @@ fn write_field(buf: &mut String, field: &syn::Field) {
     let _ = writeln!(buf, "\t\ttext = &text[variable_len..];\n");
 
     for end in ends_with {
-        let _ = writeln!(buf, "\t\tif !text.starts_with(\"{0}\") {{ return Err(\"Expected suffix '{0}' after '{1}', but none is found\"); }}", end, variable_name);
-        let _ = writeln!(buf, "\t\ttext = &text[{}..];", end.len());
+        if end.len() == 0 {
+            let _ = writeln!(buf, "\t\tif text.len() > 0 {{ return Err(\"Expected input to end after '{}', but there some remains\"); }}", variable_name);
+        } else {
+            let _ = writeln!(buf, "\t\tif !text.starts_with(\"{0}\") {{ return Err(\"Expected suffix '{0}' after '{1}', but none is found\"); }}", end, variable_name);
+            let _ = writeln!(buf, "\t\ttext = &text[{}..];", end.len());
+        }
     }
 }
 
@@ -244,7 +255,7 @@ fn generate(ast: syn::DeriveInput) -> String {
     let _ = writeln!(buf, "\t}}");
     let _ = writeln!(buf, "\n}}");
 
-    println!("{}", buf);
+    //println!("{}", buf);
 
     buf
 }
