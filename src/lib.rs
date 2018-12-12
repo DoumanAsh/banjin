@@ -9,8 +9,16 @@
 //! - `ends_with = <prefix>` - Specifies string with which parse step should end(can be stacked). Errors if suffix is missing. If empty, expects EOF.
 //! - `skip = <chars>` - Specifies to skip, until not meeting character outside of specified.
 //! - `skip(ws)` - Specifies to skip all white space characters.
-//! - `format(<chars>)` - Specifies list of characters that should contain value to parse from.
-//! - `format(not(<chars>))` - Specifies list of characters that should contain value to parse from.
+//! - `format(<format>)` - Specifies list of characters that should contain value to parse from.
+//! - `format(not(<format>))` - Specifies list of characters that should contain value to parse from.
+//!
+//! ## Formats
+//!
+//! - Literal string - When string is specified as argument to `format`, it is used as set of characters.
+//! - `numeric` - When specified, match using `char::is_numeric()`
+//! - `digit(<base>)` - When specified, match using `char::is_digit(<base>)`
+//! - `ascii` - When specified, match using `char::is_ascii()`
+//! - 'alphabetic' - When specified, match using `char::is_alphabetic()`
 //!
 //! ## Usage
 //!
@@ -23,7 +31,8 @@
 //!     #[skip(ws)]
 //!     #[starts_with = "+"]
 //!     #[skip(ws)]
-//!     #[format("1234567890")]
+//!     #[format(ascii)]
+//!     #[format(digit(10))]
 //!     pub first: u32,
 //!     #[skip(ws)]
 //!     #[format(not("d"))]
@@ -62,13 +71,21 @@ use proc_macro::TokenStream;
 use quote::quote;
 
 enum FormatData {
-    Str(String)
+    Str(String),
+    Numeric,
+    Digit(u64),
+    Ascii,
+    Alphabetic,
 }
 
 impl FormatData {
     fn is_empty(&self) -> bool {
         match self {
             FormatData::Str(ref format) => format.len() == 0,
+            FormatData::Numeric => false,
+            FormatData::Digit(_) => false,
+            FormatData::Ascii => false,
+            FormatData::Alphabetic => false,
         }
     }
 
@@ -79,7 +96,19 @@ impl FormatData {
                     let _ = write!(buf, " || ");
                 }
                 let _ = write!(buf, "ch == '{}'", ch);
-            }
+            },
+            FormatData::Numeric => {
+                let _ = write!(buf, "ch.is_numeric()");
+            },
+            FormatData::Digit(base) => {
+                let _ = write!(buf, "ch.is_digit({})",  base);
+            },
+            FormatData::Ascii => {
+                let _ = write!(buf, "ch.is_ascii()");
+            },
+            FormatData::Alphabetic => {
+                let _ = write!(buf, "ch.is_alphabetic()");
+            },
         }
     }
 }
@@ -106,6 +135,23 @@ impl FormatBuilder {
         }
     }
 
+    fn parse_digit_meta(meta: &syn::Meta) -> FormatData {
+        match meta {
+            syn::Meta::List(arg) => match arg.nested.first().expect("'format(digit(...))' must be with argument") {
+                syn::punctuated::Pair::Punctuated(_, _) => panic!("'format(digit(...))' has more than one attribute"),
+                syn::punctuated::Pair::End(arg) => match arg {
+                    syn::NestedMeta::Literal(syn::Lit::Int(int)) => if int.value() > 36 {
+                        panic!("'format(digit(...)) cannot be larger than 36");
+                    } else {
+                        FormatData::Digit(int.value())
+                    },
+                    _ => panic!("'format(digit(...))' expects integer argument"),
+                }
+            },
+            _ => panic!("'format(digit)` expects single argument")
+        }
+    }
+
     fn parse(&mut self, meta: syn::Meta) {
         match meta {
             syn::Meta::List(meta) => {
@@ -115,18 +161,51 @@ impl FormatBuilder {
                 };
 
                 match arg {
-                    syn::NestedMeta::Meta(arg) => match arg.name() == "not" {
-                        true => match arg {
-                            syn::Meta::List(arg) => match arg.nested.first().expect("format(not(...))' must be string literal") {
-                                syn::punctuated::Pair::Punctuated(_, _) => panic!("'format(not(...))' has more than one attribute"),
-                                syn::punctuated::Pair::End(arg) => match arg {
-                                    syn::NestedMeta::Literal(syn::Lit::Str(text)) => self.inner.push(Format::Neg(text.value().into())),
-                                    _ => panic!("'format(not(...))' must be string literal"),
+                    syn::NestedMeta::Meta(arg) => {
+                        if arg.name() == "not" {
+                            match arg {
+                                syn::Meta::List(arg) => match arg.nested.first().expect("format(not(...))' must be with argument") {
+                                    syn::punctuated::Pair::Punctuated(_, _) => panic!("'format(not(...))' has more than one attribute"),
+                                    syn::punctuated::Pair::End(arg) => match arg {
+                                        syn::NestedMeta::Literal(syn::Lit::Str(text)) => self.inner.push(Format::Neg(text.value().into())),
+                                        syn::NestedMeta::Meta(meta) => if meta.name() == "numeric" {
+                                            self.inner.push(Format::Neg(FormatData::Numeric))
+                                        } else if meta.name() == "digit" {
+                                            let res = Self::parse_digit_meta(meta);
+                                            self.inner.push(Format::Neg(res));
+                                        } else if meta.name() == "ascii" {
+                                            self.inner.push(Format::Neg(FormatData::Ascii))
+                                        } else if meta.name() == "alphabetic" {
+                                            self.inner.push(Format::Neg(FormatData::Alphabetic))
+                                        } else {
+                                            panic!("'format(not(...))' doesn't accept {}", meta.name());
+                                        },
+                                        _ => panic!("'format(not(...))' is used with wrong syntax"),
+                                    },
                                 },
-                            },
-                            _ => panic!("'format(not(...))' must be string literal"),
-                        },
-                        false => panic!("'format' accepts only 'not' modifier")
+                                _ => panic!("'format(not(...))' requires value"),
+                            }
+                        } else if arg.name() == "numeric" {
+                            match arg {
+                                syn::Meta::Word(_) => self.inner.push(Format::Pos(FormatData::Numeric)),
+                                _ => panic!("'format(numeric)` doesn't accept any argument")
+                            }
+                        } else if arg.name() == "digit" {
+                            let res = Self::parse_digit_meta(arg);
+                            self.inner.push(Format::Pos(res));
+                        } else if arg.name() == "ascii" {
+                            match arg {
+                                syn::Meta::Word(_) => self.inner.push(Format::Pos(FormatData::Ascii)),
+                                _ => panic!("'format(ascii)` doesn't accept any argument")
+                            }
+                        } else if arg.name() == "alphabetic" {
+                            match arg {
+                                syn::Meta::Word(_) => self.inner.push(Format::Pos(FormatData::Alphabetic)),
+                                _ => panic!("'format(alphabetic)` doesn't accept any argument")
+                            }
+                        } else {
+                            panic!("'format' doesn't understand '{}'", arg.name())
+                        }
                     },
                     syn::NestedMeta::Literal(lit) => match lit {
                         syn::Lit::Str(text) => self.inner.push(Format::Pos(text.value().into())),
@@ -148,7 +227,7 @@ impl FormatBuilder {
 
         for (idx, format) in self.inner.drain(..).enumerate() {
             if idx > 0 {
-                let _ = write!(buf, " || ");
+                let _ = write!(buf, " && ");
             }
 
             let (format, is_negative) = match format {
@@ -263,7 +342,7 @@ fn write_field(buf: &mut String, field: &syn::Field) {
 
     for end in ends_with {
         if end.len() == 0 {
-            let _ = writeln!(buf, "\t\tif text.len() > 0 {{ return Err(\"Expected input to end after '{}', but there some remains\"); }}", variable_name);
+            let _ = writeln!(buf, "\t\tif text.len() > 0 {{ return Err(\"Expected input to end after '{}', but some more remains\"); }}", variable_name);
         } else {
             let _ = writeln!(buf, "\t\tif !text.starts_with(\"{0}\") {{ return Err(\"Expected suffix '{0}' after '{1}', but none is found\"); }}", end, variable_name);
             let _ = writeln!(buf, "\t\ttext = &text[{}..];", end.len());
@@ -304,8 +383,6 @@ fn generate(ast: syn::DeriveInput) -> String {
 
     let _ = writeln!(buf, "\t}}");
     let _ = writeln!(buf, "\n}}");
-
-    println!("{}", buf);
 
     buf
 }
