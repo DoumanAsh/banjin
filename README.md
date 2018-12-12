@@ -1,6 +1,6 @@
 # banjin
 
-[![Build Status](https://travis-ci.org/DoumanAsh/banjin?branch=master)](https://travis-ci.org/DoumanAsh/banjin)
+[![Build Status](https://travis-ci.org/DoumanAsh/banjin.svg?branch=master)](https://travis-ci.org/DoumanAsh/banjin)
 [![Crates.io](https://img.shields.io/crates/v/banjin.svg)](https://crates.io/crates/banjin)
 [![Documentation](https://docs.rs/banjin/badge.svg)](https://docs.rs/crate/banjin/)
 [![dependency status](https://deps.rs/repo/github/DoumanAsh/banjin/status.svg)](https://deps.rs/repo/github/DoumanAsh/banjin)
