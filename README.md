@@ -25,7 +25,7 @@ Each, attached to struct's field
 - `numeric` - When specified, match using `char::is_numeric()`
 - `digit(<base>)` - When specified, match using `char::is_digit(<base>)`
 - `ascii` - When specified, match using `char::is_ascii()`
-- 'alphabetic' - When specified, match using `char::is_alphabetic()`
+- `alphabetic` - When specified, match using `char::is_alphabetic()`
 
 ## Usage
 
