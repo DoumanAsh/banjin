@@ -5,9 +5,11 @@
 [![Documentation](https://docs.rs/banjin/badge.svg)](https://docs.rs/crate/banjin/)
 [![dependency status](https://deps.rs/repo/github/DoumanAsh/banjin/status.svg)](https://deps.rs/repo/github/DoumanAsh/banjin)
 
-Simple code generator for string parsing
+Simple code generator for manual parsing
 
 ## Attributes
+
+### Struct
 
 There are several attributes that control behaviour of parser
 Each, attached to struct's field
@@ -19,7 +21,7 @@ Each, attached to struct's field
 - `format(<format>)` - Specifies list of characters that should contain value to parse from.
 - `format(not(<format>))` - Specifies list of characters that should contain value to parse from.
 
-## Formats
+##### Formats
 
 - Literal string - When string is specified as argument to `format`, it is used as set of characters.
 - `numeric` - When specified, match using `char::is_numeric()`
@@ -27,7 +29,14 @@ Each, attached to struct's field
 - `ascii` - When specified, match using `char::is_ascii()`
 - `alphabetic` - When specified, match using `char::is_alphabetic()`
 
+### Enum
+
+- `format = <format>` - Specifies string to match against.
+- `case` - Specifies case sensitive match. By default it is insensitive.
+
 ## Usage
+
+### Struct
 
 ```rust
 use std::str::FromStr;
@@ -67,4 +76,30 @@ fn main() {
     assert!(data.is_err());
 }
 
+```
+
+### Enum
+
+```rust
+use std::str::FromStr;
+
+#[derive(banjin::Parser, PartialEq, Eq, Debug)]
+enum Gender {
+    Male,
+    #[case]
+    Female,
+    #[format = "None"]
+    Other
+}
+
+fn main() {
+    let gender = Gender::from_str("male").expect("Parse");
+    assert_eq!(gender, Gender::Male);
+
+    let gender = Gender::from_str("female");
+    assert!(gender.is_err());
+
+    let gender = Gender::from_str("none").expect("Parse");
+    assert_eq!(gender, Gender::Other);
+}
 ```

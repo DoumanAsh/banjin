@@ -2,6 +2,8 @@
 //!
 //! ## Attributes
 //!
+//! ### Struct
+//!
 //! There are several attributes that control behaviour of parser
 //! Each, attached to struct's field
 //!
@@ -12,7 +14,7 @@
 //! - `format(<format>)` - Specifies list of characters that should contain value to parse from.
 //! - `format(not(<format>))` - Specifies list of characters that should contain value to parse from.
 //!
-//! ## Formats
+//! ##### Formats
 //!
 //! - Literal string - When string is specified as argument to `format`, it is used as set of characters.
 //! - `numeric` - When specified, match using `char::is_numeric()`
@@ -20,7 +22,14 @@
 //! - `ascii` - When specified, match using `char::is_ascii()`
 //! - `alphabetic` - When specified, match using `char::is_alphabetic()`
 //!
+//! ### Enum
+//!
+//! - `format = <format>` - Specifies string to match against.
+//! - `case` - Specifies case sensitive match. By default it is insensitive.
+//!
 //! ## Usage
+//!
+//! ### Struct
 //!
 //! ```rust
 //! use std::str::FromStr;
@@ -61,6 +70,32 @@
 //! }
 //!
 //! ```
+//!
+//! ### Enum
+//!
+//! ```rust
+//! use std::str::FromStr;
+//!
+//! #[derive(banjin::Parser, PartialEq, Eq, Debug)]
+//! enum Gender {
+//!     Male,
+//!     #[case]
+//!     Female,
+//!     #[format = "None"]
+//!     Other
+//! }
+//!
+//! fn main() {
+//!     let gender = Gender::from_str("male").expect("Parse");
+//!     assert_eq!(gender, Gender::Male);
+//!
+//!     let gender = Gender::from_str("female");
+//!     assert!(gender.is_err());
+//!
+//!     let gender = Gender::from_str("none").expect("Parse");
+//!     assert_eq!(gender, Gender::Other);
+//! }
+//! ```
 extern crate proc_macro;
 extern crate syn;
 extern crate quote;
@@ -69,6 +104,11 @@ use std::fmt::Write;
 
 use proc_macro::TokenStream;
 use quote::quote;
+
+#[cfg(feature = "no_std")]
+const FROM_STR: &'static str = "core::str::FromStr";
+#[cfg(not(feature = "no_std"))]
+const FROM_STR: &'static str = "std::str::FromStr";
 
 enum FormatData {
     Str(String),
@@ -350,25 +390,14 @@ fn write_field(buf: &mut String, field: &syn::Field) {
     }
 }
 
-fn generate(ast: syn::DeriveInput) -> String {
+fn from_struct(ast: &syn::DeriveInput, payload: &syn::DataStruct) -> String {
     let mut buf = String::new();
-
-    let payload = match ast.data {
-        syn::Data::Struct(data) => data,
-        _ => panic!("derive(Parser) is available for structs only"),
-    };
-
     let (impl_gen, type_gen, where_clause) = ast.generics.split_for_impl();
 
-    #[cfg(feature = "no_std")]
-    let target = "core::str::FromStr";
-    #[cfg(not(feature = "no_std"))]
-    let target = "std::str::FromStr";
-
-    let _ = writeln!(buf, "{} {} for {}{} {{", quote!(impl#impl_gen), target, ast.ident, quote!(#type_gen #where_clause));
+    let _ = writeln!(buf, "{} {} for {}{} {{", quote!(impl#impl_gen), FROM_STR, ast.ident, quote!(#type_gen #where_clause));
     let _ = writeln!(buf, "\ttype Err = &'static str;\n");
     let _ = writeln!(buf, "\tfn from_str(text: &str) -> Result<Self, Self::Err> {{");
-    let _ = writeln!(buf, "\t\tuse {};\n", target);
+    let _ = writeln!(buf, "\t\tuse {};\n", FROM_STR);
     let _ = writeln!(buf, "\t\tlet mut text = text;\n");
 
     for field in payload.fields.iter() {
@@ -385,9 +414,79 @@ fn generate(ast: syn::DeriveInput) -> String {
     let _ = writeln!(buf, "\n}}");
 
     buf
+
 }
 
-#[proc_macro_derive(Parser, attributes(skip, format, starts_with, ends_with))]
+fn from_enum(ast: &syn::DeriveInput, payload: &syn::DataEnum) -> String {
+    let mut buf = String::new();
+
+    let (impl_gen, type_gen, where_clause) = ast.generics.split_for_impl();
+
+    let _ = writeln!(buf, "{} {} for {}{} {{", quote!(impl#impl_gen), FROM_STR, ast.ident, quote!(#type_gen #where_clause));
+    let _ = writeln!(buf, "\ttype Err = &'static str;\n");
+    let _ = writeln!(buf, "\tfn from_str(text: &str) -> Result<Self, Self::Err> {{");
+
+    for (idx, variant) in payload.variants.iter().enumerate() {
+        let mut variant_name_match = None;
+        let mut is_case = false;
+
+        for meta in variant.attrs.iter().filter_map(|attr| attr.interpret_meta()) {
+            if meta.name() == "case" {
+                is_case = true;
+            } else if meta.name() == "format" {
+                match meta {
+                    syn::Meta::NameValue(meta) => match meta.lit {
+                        syn::Lit::Str(start) => {
+                            variant_name_match = Some(start.value());
+                        }
+                        _ => panic!("'format' requires string argument"),
+                    },
+                    _ => panic!("'format' requires string argument"),
+                }
+            }
+        }
+
+        let variant_name_match = match variant_name_match {
+            Some(name) => name,
+            _ => format!("{}", variant.ident),
+        };
+
+        match variant.fields {
+            syn::Fields::Unit => (),
+            _ => panic!("Field '{}' is non-unit. Not supported!", variant.ident),
+        }
+
+        if idx == 0 {
+            let _ = write!(buf, "\t\t");
+        } else {
+            let _ = write!(buf, " ");
+        }
+
+        let _ = match is_case {
+            true => write!(buf, "if text == \"{2}\" {{ Ok({1}::{0}) }}\n\t\telse", variant.ident, ast.ident, variant_name_match),
+            false => write!(buf, "if text.eq_ignore_ascii_case(\"{2}\") {{ Ok({1}::{0}) }}\n\t\telse", variant.ident, ast.ident, variant_name_match),
+        };
+    }
+
+    let _ = writeln!(buf, "{{ Err(\"Unknown variant\") }}");
+
+    let _ = writeln!(buf, "\t}}");
+    let _ = writeln!(buf, "\n}}");
+
+    println!("{}", buf);
+
+    buf
+}
+
+fn generate(ast: syn::DeriveInput) -> String {
+    match ast.data {
+        syn::Data::Struct(ref data) => from_struct(&ast, data),
+        syn::Data::Enum(ref data) => from_enum(&ast, data),
+        _ => panic!("derive(Parser) is available for structs only"),
+    }
+}
+
+#[proc_macro_derive(Parser, attributes(skip, format, starts_with, ends_with, case))]
 pub fn parser_derive(input: TokenStream) -> TokenStream {
     let ast: syn::DeriveInput = syn::parse(input).unwrap();
 
