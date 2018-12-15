@@ -1,6 +1,6 @@
 [package]
 name = "banjin"
-version = "0.2.0"
+version = "0.3.0"
 authors = ["Douman <douman@gmx.se>"]
 description = "Savage and simple parser"
 readme = "README.md"

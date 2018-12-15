@@ -33,6 +33,8 @@ Each, attached to struct's field
 
 - `format = <format>` - Specifies string to match against.
 - `case` - Specifies case sensitive match. By default it is insensitive.
+- `default` - Specifies variant as taking default value. Should take only single `String` and
+there can be only one
 
 ## Usage
 
@@ -88,18 +90,24 @@ enum Gender {
     Male,
     #[case]
     Female,
-    #[format = "None"]
-    Other
+    #[default]
+    Other(String)
 }
 
 fn main() {
     let gender = Gender::from_str("male").expect("Parse");
     assert_eq!(gender, Gender::Male);
 
-    let gender = Gender::from_str("female");
-    assert!(gender.is_err());
+    let gender = Gender::from_str("female").expect("Parse");
+    match gender {
+        Gender::Other(text) => assert_eq!(text, "female"),
+        _ => panic!("Unexpected!")
+    }
 
     let gender = Gender::from_str("none").expect("Parse");
-    assert_eq!(gender, Gender::Other);
+    match gender {
+        Gender::Other(text) => assert_eq!(text, "none"),
+        _ => panic!("Unexpected!")
+    }
 }
 ```
